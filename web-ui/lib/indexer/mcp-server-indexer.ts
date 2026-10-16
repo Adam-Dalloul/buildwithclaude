@@ -2,6 +2,7 @@ import { db } from '@/lib/db/client'
 import { mcpServers, mcpServerStats } from '@/lib/db/schema'
 import { eq, sql } from 'drizzle-orm'
 import { safeDbQuery } from '@/lib/db/safe-query'
+import { assignShortNames } from './mcp-server-names'
 
 export interface MCPServerIndexResult {
   indexed: number
@@ -359,7 +360,7 @@ interface OfficialMCPResponse {
 }
 
 async function fetchOfficialMCPServers(): Promise<RawMCPServer[]> {
-  const servers: RawMCPServer[] = []
+  const entries: OfficialMCPResponse['servers'] = []
   let cursor: string | null = null
   let pageCount = 0
   const maxPages = 20
@@ -380,53 +381,58 @@ async function fetchOfficialMCPServers(): Promise<RawMCPServer[]> {
 
       const data = (await response.json()) as OfficialMCPResponse
       pageCount++
-
-      for (const entry of data.servers) {
-        const server = entry.server
-        const meta = entry._meta?.['io.modelcontextprotocol.registry/official'] || entry._meta || {}
-
-        if (!server || !server.name) {
-          continue
-        }
-
-        const shortName = getShortName(server.name)
-        const category = categorizeServer(server.name, server.description || '')
-
-        servers.push({
-          name: shortName,
-          display_name: server.title || formatServerName(server.name),
-          full_name: server.name,
-          category,
-          description: server.description || `MCP server: ${server.name}`,
-          version: server.version,
-          server_type: determineServerType(server.packages, server.remotes),
-          vendor: server.name.includes('/') ? server.name.split('/')[0] : 'Community',
-          verification: {
-            status: 'verified',
-            maintainer: server.name.includes('/') ? server.name.split('/')[0] : 'Community',
-          },
-          sources: {
-            github: server.repository?.url,
-            official: server.website || server.repository?.url,
-          },
-          stats: {
-            last_updated: meta.updatedAt || meta.publishedAt,
-          },
-          source_registry: {
-            type: 'official-mcp',
-            url: `https://registry.modelcontextprotocol.io/servers/${encodeURIComponent(server.name)}`,
-          },
-          packages: server.packages,
-          remotes: server.remotes,
-          environment_variables: extractEnvVars(server.packages),
-          installation_methods: buildInstallationMethods(shortName, server.packages, server.remotes),
-          tags: [],
-        })
-      }
+      entries.push(...data.servers)
 
       cursor = data.metadata?.nextCursor || null
       console.log(`  Fetched page ${pageCount}: ${data.servers.length} servers`)
     } while (cursor && pageCount < maxPages)
+
+    // Names are assigned after every page is in, since a short name can be shared across pages.
+    const shortNames = assignShortNames(entries.flatMap((entry) => (entry.server?.name ? [entry.server.name] : [])))
+    const servers: RawMCPServer[] = []
+
+    for (const entry of entries) {
+      const server = entry.server
+      const meta = entry._meta?.['io.modelcontextprotocol.registry/official'] || entry._meta || {}
+
+      if (!server || !server.name) {
+        continue
+      }
+
+      const shortName = shortNames.get(server.name) || server.name
+      const category = categorizeServer(server.name, server.description || '')
+
+      servers.push({
+        name: shortName,
+        display_name: server.title || formatServerName(server.name),
+        full_name: server.name,
+        category,
+        description: server.description || `MCP server: ${server.name}`,
+        version: server.version,
+        server_type: determineServerType(server.packages, server.remotes),
+        vendor: server.name.includes('/') ? server.name.split('/')[0] : 'Community',
+        verification: {
+          status: 'verified',
+          maintainer: server.name.includes('/') ? server.name.split('/')[0] : 'Community',
+        },
+        sources: {
+          github: server.repository?.url,
+          official: server.website || server.repository?.url,
+        },
+        stats: {
+          last_updated: meta.updatedAt || meta.publishedAt,
+        },
+        source_registry: {
+          type: 'official-mcp',
+          url: `https://registry.modelcontextprotocol.io/servers/${encodeURIComponent(server.name)}`,
+        },
+        packages: server.packages,
+        remotes: server.remotes,
+        environment_variables: extractEnvVars(server.packages),
+        installation_methods: buildInstallationMethods(shortName, server.packages, server.remotes),
+        tags: [],
+      })
+    }
 
     return servers
   } catch (error) {
@@ -571,12 +577,6 @@ function formatServerName(name: string): string {
     .split(' ')
     .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
     .join(' ')
-}
-
-function getShortName(name: string): string {
-  if (!name) return 'unknown'
-  const baseName = name.includes('/') ? name.split('/').pop() : name
-  return (baseName || 'unknown').toLowerCase().replace(/[^a-z0-9-]/g, '-')
 }
 
 function categorizeServer(name: string, description: string): string {

@@ -2,7 +2,7 @@ import { db } from '@/lib/db/client'
 import { mcpServers, mcpServerStats } from '@/lib/db/schema'
 import { eq, sql } from 'drizzle-orm'
 import { safeDbQuery } from '@/lib/db/safe-query'
-import { assignShortNames } from './mcp-server-names'
+import { assignShortNames, assignSlugs, slugify } from './mcp-server-names'
 
 export interface MCPServerIndexResult {
   indexed: number
@@ -23,6 +23,8 @@ export interface StatsSyncResult {
 
 interface RawMCPServer {
   name: string
+  // Set when the source assigns slugs for the whole batch (see assignSlugs).
+  slug?: string
   display_name: string
   full_name?: string
   category: string
@@ -251,7 +253,7 @@ export async function syncMCPServerStats(): Promise<StatsSyncResult> {
  * Upsert a single MCP server to the database
  */
 async function upsertMCPServer(server: RawMCPServer, sourceRegistry: string): Promise<boolean> {
-  const slug = generateSlug(server.name, sourceRegistry)
+  const slug = server.slug || generateSlug(server.name, sourceRegistry)
 
   await db
     .insert(mcpServers)
@@ -319,8 +321,7 @@ async function upsertMCPServer(server: RawMCPServer, sourceRegistry: string): Pr
  * Generate a unique slug for the MCP server
  */
 function generateSlug(name: string, sourceRegistry: string): string {
-  const baseName = name.toLowerCase().replace(/[^a-z0-9-]/g, '-').replace(/-+/g, '-')
-  return `${sourceRegistry}-${baseName}`
+  return `${sourceRegistry}-${slugify(name)}`
 }
 
 // ============================================================================
@@ -388,7 +389,9 @@ async function fetchOfficialMCPServers(): Promise<RawMCPServer[]> {
     } while (cursor && pageCount < maxPages)
 
     // Names are assigned after every page is in, since a short name can be shared across pages.
-    const shortNames = assignShortNames(entries.flatMap((entry) => (entry.server?.name ? [entry.server.name] : [])))
+    const registryNames = entries.flatMap((entry) => (entry.server?.name ? [entry.server.name] : []))
+    const shortNames = assignShortNames(registryNames)
+    const slugs = assignSlugs(registryNames, 'official-mcp')
     const servers: RawMCPServer[] = []
 
     for (const entry of entries) {
@@ -404,6 +407,7 @@ async function fetchOfficialMCPServers(): Promise<RawMCPServer[]> {
 
       servers.push({
         name: shortName,
+        slug: slugs.get(server.name),
         display_name: server.title || formatServerName(server.name),
         full_name: server.name,
         category,

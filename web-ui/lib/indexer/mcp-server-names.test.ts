@@ -53,6 +53,31 @@ describe('assignSlugs', () => {
     assert.equal(new Set(forward.values()).size, names.length)
   })
 
+  it('keeps lengthening a suffix while it matches a slug that is already given out', () => {
+    // a..b/mcp first gets official-mcp-a-b-mcp-bb11747b; two servers own that slug and its
+    // 16-character form as their plain slugs, so it moves on to 32 characters.
+    const names = ['a.b/mcp', 'a..b/mcp', 'io.github.someone/a-b-mcp-bb11747b', 'io.github.someone/a-b-mcp-bb11747b701b3585']
+    for (const order of [names, [...names].reverse()]) {
+      const slugs = assignSlugs(order, 'official-mcp')
+
+      assert.equal(slugs.get('io.github.someone/a-b-mcp-bb11747b'), 'official-mcp-a-b-mcp-bb11747b')
+      assert.equal(slugs.get('io.github.someone/a-b-mcp-bb11747b701b3585'), 'official-mcp-a-b-mcp-bb11747b701b3585')
+      assert.equal(slugs.get('a..b/mcp'), `official-mcp-a-b-mcp-${nameSuffix('a..b/mcp', 32)}`)
+      assert.equal(new Set(slugs.values()).size, names.length)
+    }
+  })
+
+  it('adds a counter when even the full hash is taken', () => {
+    const owners = [8, 16, 32, 64].map((length) => `io.github.someone/a-b-mcp-${nameSuffix('a..b/mcp', length)}`)
+    const names = ['a.b/mcp', 'a..b/mcp', ...owners]
+    for (const order of [names, [...names].reverse()]) {
+      const slugs = assignSlugs(order, 'official-mcp')
+
+      assert.equal(slugs.get('a..b/mcp'), `official-mcp-a-b-mcp-${nameSuffix('a..b/mcp', 64)}-2`)
+      assert.equal(new Set(slugs.values()).size, names.length)
+    }
+  })
+
   it('leaves a slug only one server produces unchanged', () => {
     const slugs = assignSlugs(['io.github.someone/weather', 'com.example/mcp', 'org.example/mcp'], 'official-mcp')
 

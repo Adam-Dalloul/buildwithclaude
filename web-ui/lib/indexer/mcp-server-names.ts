@@ -56,7 +56,10 @@ export function nameSuffix(name: string, length = 8): string {
  * keeps the plain slug: the one whose short name is its own last segment rather than a
  * fallback, then the one whose short name needed no collapsing, then the first in sort
  * order. Every other one gets `-<nameSuffix(registry name)>`, which depends only on its own
- * registry name, so the result does not change with page order.
+ * registry name. A suffixed slug never takes a slug already given out or any server's plain
+ * slug: the suffix keeps growing (8, 16, 32, then all 64 hex characters), and if even the full
+ * hash is taken a counter is added. Groups are visited in sorted order, so the result does not
+ * change with page order.
  */
 export function assignSlugs(names: string[], sourceRegistry: string): Map<string, string> {
   const shortNames = assignShortNames(names)
@@ -74,15 +77,25 @@ export function assignSlugs(names: string[], sourceRegistry: string): Map<string
   const slugs = new Map<string, string>()
   const used = new Set<string>()
   const plain = new Set(groups.keys())
-  for (const [slug, group] of groups) {
-    const ordered = [...group].sort((a, b) => {
+  const taken = (candidate: string) => used.has(candidate) || plain.has(candidate)
+  for (const slug of [...groups.keys()].sort()) {
+    const ordered = [...(groups.get(slug) || [])].sort((a, b) => {
       const [ra, rb] = [rank(a), rank(b)]
       return ra[0] - rb[0] || ra[1] - rb[1] || (a < b ? -1 : a > b ? 1 : 0)
     })
     ordered.forEach((name, index) => {
-      let candidate = index === 0 ? slug : `${slug}-${nameSuffix(name)}`
-      // A suffixed slug that happens to equal another server's slug gets the longer suffix.
-      if (index > 0 && (used.has(candidate) || plain.has(candidate))) candidate = `${slug}-${nameSuffix(name, 16)}`
+      let candidate = slug
+      if (index > 0) {
+        const hash = nameSuffix(name, 64)
+        let length = 8
+        candidate = `${slug}-${hash.slice(0, length)}`
+        while (taken(candidate) && length < hash.length) {
+          length = Math.min(length * 2, hash.length)
+          candidate = `${slug}-${hash.slice(0, length)}`
+        }
+        const base = candidate
+        for (let counter = 2; taken(candidate); counter++) candidate = `${base}-${counter}`
+      }
       used.add(candidate)
       slugs.set(name, candidate)
     })
